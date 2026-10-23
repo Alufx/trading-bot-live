@@ -1,17 +1,31 @@
-import os, requests, time, threading, json, websocket
+import os
+import json
+import time
+import threading
+import requests
+import websocket
 from flask import Flask
 from collections import Counter, deque
 
-BOT = os.getenv("BOT_TOKEN", "8881080778:AAFvDQyizhJzB9oiQCJ215HszZxuqG7P21M")
-CHAT = os.getenv("CHAT_ID", "7966500934")
+BOT = os.getenv("BOT_TOKEN", "8881080452:AAH...")
+CHAT = os.getenv("CHAT_ID", "79665009")
+# Use your real tokens in Render -> Environment Variables
 
 app = Flask(__name__)
+
 @app.route('/')
 def home():
-    return "Bot LIVE - Real Market - 24/7"
+    return "Bot LIVE - Real Market - Running!"
 
 ticks = deque(maxlen=100)
 digits = deque(maxlen=100)
+
+def send_telegram(msg):
+    try:
+        url = f"https://api.telegram.org/bot{BOT}/sendMessage"
+        requests.post(url, json={"chat_id": CHAT, "text": msg}, timeout=10)
+    except Exception as e:
+        print(f"Telegram error: {e}")
 
 def on_message(ws, msg):
     try:
@@ -19,28 +33,54 @@ def on_message(ws, msg):
         if 'tick' in data:
             price = data['tick']['quote']
             ticks.append(price)
-            last_digit = int(str(price).split('.')[-1][-1])
+            last_digit = int(str(price)[-1])
             digits.append(last_digit)
+            print(f"Price: {price} -> Digit: {last_digit}")
+
             if len(digits) >= 15:
-                c = Counter(digits)
-                mc = c.most_common(1)[0]
-                txt = f"📊 R_10 REAL\n💰 {price}\n🔢 Digit: {last_digit}\n🎯 MATCH: {mc[0]} {mc[1]}/{len(digits)}\n📈 {dict(c)}"
-                requests.post(f"https://api.telegram.org/bot{BOT}/sendMessage", data={"chat_id": CHAT, "text": txt}, timeout=5)
+                counter = Counter(digits)
+                most_common = counter.most_common(1)[0]
+                print(f"Stats: {counter}")
+
+                # Example signal logic - customize yours
+                if most_common[1] >= 10:
+                    send_telegram(f"🔥 SIGNAL: Digit {most_common[0]} appeared {most_common[1]}/15 times! Price: {price}")
     except Exception as e:
-        print(e)
+        print(f"on_message error: {e}")
+
+def on_error(ws, error):
+    print(f"WS Error: {error}")
+
+def on_close(ws, close_status_code, close_msg):
+    print("WS Closed, reconnecting in 5s...")
+    time.sleep(5)
+    start_bot()
 
 def on_open(ws):
-    ws.send(json.dumps({"ticks": "R_10"}))
+    print("WS Connected!")
+    ws.send(json.dumps({"ticks": "R_100", "subscribe": 1}))
 
 def run_ws():
     while True:
         try:
-            ws = websocket.WebSocketApp("wss://ws.derivws.com/websockets/v3?app_id=1089", on_message=on_message, on_open=on_open)
-            ws.run_forever()
-        except:
+            ws = websocket.WebSocketApp(
+                "wss://ws.derivws.com/websockets/v3?app_id=1089",
+                on_message=on_message,
+                on_error=on_error,
+                on_close=on_close,
+                on_open=on_open
+            )
+            ws.run_forever(ping_interval=30, ping_timeout=10)
+        except Exception as e:
+            print(f"WS run error: {e}")
             time.sleep(5)
 
-threading.Thread(target=run_ws, daemon=True).start()
+def start_bot():
+    thread = threading.Thread(target=run_ws, daemon=True)
+    thread.start()
+
+# Start bot when gunicorn starts
+start_bot()
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=10000)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
