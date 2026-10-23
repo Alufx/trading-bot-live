@@ -1,0 +1,46 @@
+import os, requests, time, threading, json, websocket
+from flask import Flask
+from collections import Counter, deque
+
+BOT = os.getenv("BOT_TOKEN", "8881080778:AAFvDQyizhJzB9oiQCJ215HszZxuqG7P21M")
+CHAT = os.getenv("CHAT_ID", "7966500934")
+
+app = Flask(__name__)
+@app.route('/')
+def home():
+    return "Bot LIVE - Real Market - 24/7"
+
+ticks = deque(maxlen=100)
+digits = deque(maxlen=100)
+
+def on_message(ws, msg):
+    try:
+        data = json.loads(msg)
+        if 'tick' in data:
+            price = data['tick']['quote']
+            ticks.append(price)
+            last_digit = int(str(price).split('.')[-1][-1])
+            digits.append(last_digit)
+            if len(digits) >= 15:
+                c = Counter(digits)
+                mc = c.most_common(1)[0]
+                txt = f"📊 R_10 REAL\n💰 {price}\n🔢 Digit: {last_digit}\n🎯 MATCH: {mc[0]} {mc[1]}/{len(digits)}\n📈 {dict(c)}"
+                requests.post(f"https://api.telegram.org/bot{BOT}/sendMessage", data={"chat_id": CHAT, "text": txt}, timeout=5)
+    except Exception as e:
+        print(e)
+
+def on_open(ws):
+    ws.send(json.dumps({"ticks": "R_10"}))
+
+def run_ws():
+    while True:
+        try:
+            ws = websocket.WebSocketApp("wss://ws.derivws.com/websockets/v3?app_id=1089", on_message=on_message, on_open=on_open)
+            ws.run_forever()
+        except:
+            time.sleep(5)
+
+threading.Thread(target=run_ws, daemon=True).start()
+
+if __name__ == "__main__":
+    app.run(host='0.0.0.0', port=10000)
