@@ -1,82 +1,82 @@
 from flask import Flask, jsonify, request
-import random, time
+import random
+from datetime import datetime
 
 app = Flask(__name__)
-PAIRS = ["EURUSD_otc","GBPUSD_otc","EURJPY_otc","USDJPY_otc","AUDUSD_otc","EURGBP_otc","GBPJPY_otc","BTCUSD_otc"]
-STATE = {"mode":"DEMO", "history":[]}
+LOG = []
 
-def calc(pair, tf):
-    base = 1.085 + hash(pair)%50/1000
-    price = base + random.uniform(-0.01, 0.01)
-    rsi = random.randint(24, 76)
-    trend = random.choice(["UP","DOWN"])
-    bb = random.choice(["LOWER","UPPER","MIDDLE"])
-    macd = random.choice(["BULL","BEAR"])
-    buy = (35-rsi if rsi<35 else 0) + (25 if trend=="UP" else 0) + (25 if bb=="LOWER" else 0) + (20 if macd=="BULL" else 0)
-    sell = (rsi-65 if rsi>65 else 0) + (25 if trend=="DOWN" else 0) + (25 if bb=="UPPER" else 0) + (20 if macd=="BEAR" else 0)
-    if buy >= sell:
-        d="BUY"; a="CALL ▲"; col="#22c55e"; acc=random.randint(78,92)
+def gen(pair):
+    rsi = random.randint(22,78)
+    acc = random.randint(82,92)
+    price = round(1.05 + random.uniform(0.02,0.08),5)
+    if "JPY" in pair: price = round(148 + random.uniform(-2,2),3)
+    if "BTC" in pair: price = round(67400 + random.uniform(-500,500),2)
+    if rsi < 38:
+        d="CALL ▲"; c="#22c55e"; bg="#052e16"; tr="DOWN"; bb="LOWER"
+    elif rsi > 65:
+        d="PUT ▼"; c="#ef4444"; bg="#450a0a"; tr="UP"; bb="UPPER"
     else:
-        d="SELL"; a="PUT ▼"; col="#ef4444"; acc=random.randint(77,91)
-    sig={"pair":pair,"price":f"{price:.5f}","direction":d,"action":a,"accuracy":acc,"rsi":rsi,"trend":trend,"bb":bb,"macd":macd,"timeframe":tf,"timestamp":time.strftime("%H:%M:%S"),"mode":STATE["mode"],"color":col}
-    STATE["history"].insert(0,sig)
-    STATE["history"]=STATE["history"][:12]
-    return sig
-
-HTML='''<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>
-body{margin:0;background:#020617;color:#fff;font-family:Arial}.c{max-width:440px;margin:10px auto;background:#0f172a;padding:16px;border-radius:20px;border:2px solid #3b82f6}
-.t{padding:9px 12px;background:#1e293b;border-radius:20px;margin:3px;display:inline-block;cursor:pointer;font-size:11px;font-weight:bold}.a{background:#3b82f6!important;color:#fff}
-.m{padding:6px 14px;border-radius:20px;font-size:12px;font-weight:900;cursor:pointer;border:2px solid #334155}.demo{color:#fbbf24;border-color:#fbbf24}.real{color:#22c55e;border-color:#22c55e}.m.active{background:#3b82f6;color:#fff;border-color:#3b82f6}
-.b{font-size:44px;font-weight:900;text-align:center;margin:6px 0}.sig{font-size:24px;font-weight:900;text-align:center;padding:18px;border-radius:14px;margin:10px 0;border:2px solid}
-.btn{width:100%;padding:16px;background:linear-gradient(90deg,#3b82f6,#22c55e);border:0;border-radius:14px;font-weight:900;font-size:18px;color:#fff;cursor:pointer}
-.card{background:#1e293b;padding:10px;border-radius:12px;margin:6px 0;display:flex;justify-content:space-between;font-size:12px}
-.tf{padding:8px 12px;background:#1e293b;border-radius:10px;margin:2px;cursor:pointer;font-size:12px}.tf.a{background:#f59e0b;color:#000}
-.hist{font-size:11px;padding:6px;background:#020617;border-radius:8px;margin:3px 0;display:flex;justify-content:space-between}
-</style></head><body><div class=c>
-<div style=display:flex;justify-content:space-between;align-items:center><h2 style=margin:0>POCKET V3.1 FIX</h2><div><span id=modeDemo class="m demo active" onclick="setMode('DEMO')">DEMO</span> <span id=modeReal class="m real" onclick="setMode('REAL')">REAL</span></div></div>
-<p id=st style=color:#22c55e;font-size:11px;margin:6px 0>● LIVE - Instant Signal - OTC</p>
-<div id=pairs></div>
-<div style=margin:8px 0><span style=font-size:11px;color:#94a3b8>Timeframe:</span> <span class=tf a id=tf1 onclick="setTF('1m')">1m</span> <span class=tf id=tf2 onclick="setTF('2m')">2m</span> <span class=tf id=tf5 onclick="setTF('5m')">5m</span></div>
-<div id=ttl style=text-align:center;color:#f59e0b;font-weight:bold;margin-top:8px>EURUSD_otc - 1m</div>
-<div class=b id=pr>1.08543</div>
-<div id=sigBox class=sig style=background:#1e293b;color:#94a3b8;border-color:#334155>Click GET SIGNAL</div>
-<div style=display:grid;grid-template-columns:1fr 1fr;gap:6px><div class=card><span>RSI</span><b id=rsi>--</b></div><div class=card><span>Accuracy</span><b id=acc>--%</b></div><div class=card><span>Trend</span><b id=trend>--</b></div><div class=card><span>BB</span><b id=bb>--</b></div></div>
-<button class=btn id=btn onclick="getSignal()">🔔 GET SIGNAL NOW</button>
-<p id=timer style=text-align:center;color:#fbbf24;font-size:12px;margin:6px>Next candle in: <b id=count>00:49</b> | <span id=modeTxt>DEMO</span></p>
-<div style=margin-top:10px><b style=font-size:12px>History (Real+Demo same):</b><div id=hist></div></div>
-</div>
-<script>
-const PAIRS=["EURUSD_otc","GBPUSD_otc","EURJPY_otc","USDJPY_otc","AUDUSD_otc","EURGBP_otc","GBPJPY_otc","BTCUSD_otc"];
-let cur="EURUSD_otc";let tf="1m";let mode="DEMO";let history=[];
-function renderPairs(){let h="";PAIRS.forEach(p=>{h+=`<span class=t ${p==cur?'a':''} onclick="setP('${p}')">${p.replace('_otc','')}</span>`});document.getElementById('pairs').innerHTML=h;}
-function setP(p){cur=p;renderPairs();document.getElementById('ttl').innerText=p+" - "+tf;getPrice();}
-function setTF(t){tf=t;document.querySelectorAll('.tf').forEach(x=>x.classList.remove('a'));document.getElementById('tf'+t[0]).classList.add('a');document.getElementById('ttl').innerText=cur+" - "+tf;}
-function setMode(m){mode=m;document.getElementById('modeDemo').classList.toggle('active',m=='DEMO');document.getElementById('modeReal').classList.toggle('active',m=='REAL');document.getElementById('modeTxt').innerText=m;}
-function localSignal(){const rsi=Math.floor(24+Math.random()*52);const trend=Math.random()>0.5?"UP":"DOWN";const bb=["LOWER","UPPER","MIDDLE"][Math.floor(Math.random()*3)];const buy=rsi<35?30:0;const sell=rsi>65?30:0;const dir=buy>=sell||trend=="UP"?"BUY":"SELL";return{pair:cur,price:(1.08+Math.random()*0.03).toFixed(5),direction:dir,action:dir=="BUY"?"CALL ▲":"PUT ▼",accuracy:75+Math.floor(Math.random()*17),rsi:rsi,trend:trend,bb:bb,color:dir=="BUY"?"#22c55e":"#ef4444",timestamp:new Date().toLocaleTimeString()};}
-async function getPrice(){document.getElementById('pr').innerText=(1.08+Math.random()*0.03).toFixed(5);}
-async function getSignal(){const box=document.getElementById('sigBox');box.innerText='Analyzing '+cur+'...';box.style.background='#1e293b';document.getElementById('btn').disabled=true;
- // instant fallback - show in 0.6s even if server sleeps
- setTimeout(()=>{const d=localSignal();showSignal(d);},600);
- try{const r=await fetch('/api/signal?pair='+cur+'&tf='+tf+'&_='+Date.now(),{cache:'no-store'});if(r.ok){const d=await r.json();showSignal(d);}}catch(e){console.log('server sleep, using local');}
- document.getElementById('btn').disabled=false;
-}
-function showSignal(d){document.getElementById('pr').innerText=d.price;document.getElementById('rsi').innerText=d.rsi;document.getElementById('trend').innerText=d.trend;document.getElementById('bb').innerText=d.bb;document.getElementById('acc').innerText=d.accuracy+'%';const box=document.getElementById('sigBox');box.innerText=d.action+' '+d.pair.replace('_otc','')+' '+d.accuracy+'%';box.style.background=d.direction=='BUY'?'#052e16':'#450a0a';box.style.color=d.color;box.style.borderColor=d.color;history.unshift(d);history=history.slice(0,8);let h="";history.forEach(x=>{h+=`<div class=hist><span>${x.timestamp} ${x.pair.replace('_otc','')} ${x.timeframe||tf} ${x.mode||mode}</span><span style=color:${x.color};font-weight:900>${x.action} ${x.accuracy}%</span></div>`});document.getElementById('hist').innerHTML=h;if(navigator.vibrate) navigator.vibrate([100,50,100]);}
-function tick(){const now=new Date();const sec=60-now.getSeconds();document.getElementById('count').innerText='00:'+(sec<10?'0'+sec:sec);}renderPairs();setInterval(tick,1000);setInterval(getPrice,2000);
-</script></body></html>'''
+        d="WAIT ●"; c="#f59e0b"; bg="#451a03"; tr="RANGE"; bb="MIDDLE"
+    return {"price":price,"dir":d,"color":c,"bg":bg,"rsi":rsi,"acc":acc,"trend":tr,"bb":bb}
 
 @app.route('/')
-def home(): return HTML
+def home():
+    return """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>POCKET V3.1 FIX</title><style>
+body{margin:0;background:#020617;color:#fff;font-family:system-ui} .app{max-width:420px;margin:0 auto;background:#0b1220;min-height:100vh;padding:12px;border:2px solid #2563eb;border-radius:20px}
+.pairs{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:10px 0}
+.pairs button{padding:10px 2px;border-radius:12px;border:0;background:#1e293b;color:#cbd5e1;font-weight:700;font-size:12px}
+.pairs button.active{background:#e0f2fe;color:#0c4a6e}
+.tf{display:flex;gap:6px;color:#64748b;font-size:13px;align-items:center;margin:8px 0}
+.tf button{padding:8px 14px;border-radius:12px;border:0;background:#1e293b;color:#fff}
+.tf button.active{background:#fff;color:#000;font-weight:900}
+.price{text-align:center;font-size:48px;font-weight:900;margin:6px 0}
+.sig{padding:18px;border-radius:16px;text-align:center;font-size:26px;font-weight:900;border:2px solid;margin:10px 0;background:#1e293b;color:#94a3b8}
+.row{display:flex;justify-content:space-between;background:#151f32;padding:14px;border-radius:14px;margin:7px 0}
+.btn{width:100%;padding:18px;border-radius:16px;border:0;font-weight:900;font-size:19px;background:linear-gradient(90deg,#38bdf8,#22c55e);color:#000}
+.small{font-size:12px;color:#f59e0b;text-align:center;margin:8px 0}
+.log{background:#020617;padding:8px;border-radius:10px;font-size:11px}
+</style></head><body><div class=app>
+<div style="display:flex;justify-content:space-between"><h2 style="margin:0">POCKET V3.1<br>FIX</h2><button id=modeBtn onclick="toggle()" style="padding:8px 18px;border-radius:20px;border:0;background:#3b82f6;color:#fff;font-weight:900">DEMO</button></div>
+<div style="color:#22c55e;font-size:13px;margin:6px 0">● LIVE - Instant Signal - OTC</div>
+<div class=pairs id=pairs></div>
+<div class=tf>Timeframe:<button onclick="setTF('1m')" id=tf1m class=active>1m</button><button onclick="setTF('2m')" id=tf2m>2m</button><button onclick="setTF('5m')" id=tf5m>5m</button></div>
+<div id=label style="text-align:center;color:#f59e0b;font-weight:900;font-size:18px">EURUSD_otc - 1m</div>
+<div class=price id=price>1.09351</div>
+<div class=sig id=sig>Click GET SIGNAL</div>
+<div class=row><span>RSI</span><b id=rsi>--</b></div>
+<div class=row><span>Accuracy</span><b id=acc>--%</b></div>
+<div class=row><span>Trend</span><b id=trend>--</b></div>
+<div class=row><span>BB</span><b id=bb>--</b></div>
+<button class=btn onclick="getSig()">🔔 GET SIGNAL NOW</button>
+<div class=small>Next candle in: <b id=timer>00:50</b> | <span id=modeTxt>DEMO</span></div>
+<div style="font-size:13px;font-weight:700;margin-top:6px">History (Real+Demo same):</div><div class=log id=log></div>
+</div>
+<script>
+let cur='EURUSD_otc',tf='1m',mode='DEMO';
+const P=["EURUSD","GBPUSD","EURJPY","USDJPY","AUDUSD","EURGBP","GBPJPY","BTCUSD"];
+function render(){let h='';P.forEach(p=>{let full=p+'_otc';if(p=='BTCUSD')full=p;let active=full.includes(cur)||p==cur.replace('_otc','');h+=`<button onclick="setPair('${full}')" id="p-${p}" class="${active?'active':''}">${p}</button>`});document.getElementById('pairs').innerHTML=h}
+function setPair(p){if(!p.includes('_otc')&&p!='BTCUSD')p=p+'_otc';cur=p;render();document.getElementById('label').innerText=p+' - '+tf;document.getElementById('price').innerText=(1+Math.random()).toFixed(5)}
+function setTF(t){tf=t;document.querySelectorAll('.tf button').forEach(b=>b.classList.remove('active'));document.getElementById('tf'+t).classList.add('active');document.getElementById('label').innerText=cur+' - '+t}
+function toggle(){mode=mode=='DEMO'?'REAL':'DEMO';document.getElementById('modeBtn').innerText=mode;document.getElementById('modeBtn').style.background=mode=='REAL'?'#22c55e':'#3b82f6';document.getElementById('modeTxt').innerText=mode}
+async function getSig(){let r=await fetch(`/api/signal?pair=${cur}&tf=${tf}`);let d=await r.json();
+document.getElementById('price').innerText=d.price;document.getElementById('label').innerText=`${d.pair} - ${d.tf} - ${d.price}`;
+let b=document.getElementById('sig');b.innerText=`${d.dir} ${d.pair.replace('_otc','')} ${d.acc}%`;b.style.color=d.color;b.style.borderColor=d.color;b.style.background=d.bg;
+document.getElementById('rsi').innerText=d.rsi;document.getElementById('acc').innerText=d.acc+'%';document.getElementById('trend').innerText=d.trend;document.getElementById('bb').innerText=d.bb;
+document.getElementById('log').innerHTML=d.log.map(x=>`<div>${x}</div>`).join('')}
+render();
+let s=50;setInterval(()=>{s--;if(s<0)s=59;document.getElementById('timer').innerText=`00:${String(s).padStart(2,'0')}`},1000);
+</script></body></html>"""
 
 @app.route('/api/signal')
-def signal():
-    p = request.args.get('pair','EURUSD_otc')
-    tf = request.args.get('tf','1m')
-    s = calc(p, tf)
-    return jsonify(s)
-
-@app.route('/api/price')
-def price():
-    return jsonify({"price": f"{1.08+random.uniform(-0.01,0.01):.5f}"})
+def api():
+    pair=request.args.get('pair','EURUSD_otc')
+    tf=request.args.get('tf','1m')
+    d=gen(pair)
+    entry=f"{datetime.now().strftime('%H:%M:%S')} {pair} {tf} {d['dir']} {d['acc']}%"
+    LOG.insert(0,entry)
+    if len(LOG)>8: LOG.pop()
+    return jsonify({"pair":pair,"tf":tf,"price":d["price"],"dir":d["dir"],"color":d["color"],"bg":d["bg"],"rsi":d["rsi"],"acc":d["acc"],"trend":d["trend"],"bb":d["bb"],"log":LOG})
 
 @app.route('/health')
 def h(): return "OK"
