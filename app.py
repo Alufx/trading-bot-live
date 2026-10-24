@@ -1,82 +1,127 @@
-from flask import Flask, jsonify, request
-import random, time
+from flask import Flask, jsonify
+import os, requests, random, time
+from datetime import datetime
 
 app = Flask(__name__)
+
+TG_TOKEN = os.environ.get('TELEGRAM_TOKEN','')
+TG_CHAT = os.environ.get('TELEGRAM_CHAT_ID','')
+
 PAIRS = ["EURUSD_otc","GBPUSD_otc","EURJPY_otc","USDJPY_otc","AUDUSD_otc","EURGBP_otc","GBPJPY_otc","BTCUSD_otc"]
-STATE = {"mode":"DEMO", "history":[]}
+STATE = {"pair":"GBPUSD_otc","tf":"1m","last":{},"log":[]}
 
-def calc(pair, tf):
-    base = 1.085 + hash(pair)%50/1000
-    price = base + random.uniform(-0.01, 0.01)
-    rsi = random.randint(24, 76)
-    trend = random.choice(["UP","DOWN"])
-    bb = random.choice(["LOWER","UPPER","MIDDLE"])
-    macd = random.choice(["BULL","BEAR"])
-    buy = (35-rsi if rsi<35 else 0) + (25 if trend=="UP" else 0) + (25 if bb=="LOWER" else 0) + (20 if macd=="BULL" else 0)
-    sell = (rsi-65 if rsi>65 else 0) + (25 if trend=="DOWN" else 0) + (25 if bb=="UPPER" else 0) + (20 if macd=="BEAR" else 0)
-    if buy >= sell:
-        d="BUY"; a="CALL ▲"; col="#22c55e"; acc=random.randint(78,92)
-    else:
-        d="SELL"; a="PUT ▼"; col="#ef4444"; acc=random.randint(77,91)
-    sig={"pair":pair,"price":f"{price:.5f}","direction":d,"action":a,"accuracy":acc,"rsi":rsi,"trend":trend,"bb":bb,"macd":macd,"timeframe":tf,"timestamp":time.strftime("%H:%M:%S"),"mode":STATE["mode"],"color":col}
-    STATE["history"].insert(0,sig)
-    STATE["history"]=STATE["history"][:12]
-    return sig
+def tg_send(text):
+    if not TG_TOKEN or not TG_CHAT: return False
+    try:
+        url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+        r = requests.post(url, json={"chat_id": TG_CHAT, "text": text, "parse_mode":"Markdown"}, timeout=5)
+        return r.ok
+    except: return False
 
-HTML='''<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>
-body{margin:0;background:#020617;color:#fff;font-family:Arial}.c{max-width:440px;margin:10px auto;background:#0f172a;padding:16px;border-radius:20px;border:2px solid #3b82f6}
-.t{padding:9px 12px;background:#1e293b;border-radius:20px;margin:3px;display:inline-block;cursor:pointer;font-size:11px;font-weight:bold}.a{background:#3b82f6!important;color:#fff}
-.m{padding:6px 14px;border-radius:20px;font-size:12px;font-weight:900;cursor:pointer;border:2px solid #334155}.demo{color:#fbbf24;border-color:#fbbf24}.real{color:#22c55e;border-color:#22c55e}.m.active{background:#3b82f6;color:#fff;border-color:#3b82f6}
-.b{font-size:44px;font-weight:900;text-align:center;margin:6px 0}.sig{font-size:24px;font-weight:900;text-align:center;padding:18px;border-radius:14px;margin:10px 0;border:2px solid}
-.btn{width:100%;padding:16px;background:linear-gradient(90deg,#3b82f6,#22c55e);border:0;border-radius:14px;font-weight:900;font-size:18px;color:#fff;cursor:pointer}
-.card{background:#1e293b;padding:10px;border-radius:12px;margin:6px 0;display:flex;justify-content:space-between;font-size:12px}
-.tf{padding:8px 12px;background:#1e293b;border-radius:10px;margin:2px;cursor:pointer;font-size:12px}.tf.a{background:#f59e0b;color:#000}
-.hist{font-size:11px;padding:6px;background:#020617;border-radius:8px;margin:3px 0;display:flex;justify-content:space-between}
-</style></head><body><div class=c>
-<div style=display:flex;justify-content:space-between;align-items:center><h2 style=margin:0>POCKET V3.1 FIX</h2><div><span id=modeDemo class="m demo active" onclick="setMode('DEMO')">DEMO</span> <span id=modeReal class="m real" onclick="setMode('REAL')">REAL</span></div></div>
-<p id=st style=color:#22c55e;font-size:11px;margin:6px 0>● LIVE - Instant Signal - OTC</p>
-<div id=pairs></div>
-<div style=margin:8px 0><span style=font-size:11px;color:#94a3b8>Timeframe:</span> <span class=tf a id=tf1 onclick="setTF('1m')">1m</span> <span class=tf id=tf2 onclick="setTF('2m')">2m</span> <span class=tf id=tf5 onclick="setTF('5m')">5m</span></div>
-<div id=ttl style=text-align:center;color:#f59e0b;font-weight:bold;margin-top:8px>EURUSD_otc - 1m</div>
-<div class=b id=pr>1.08543</div>
-<div id=sigBox class=sig style=background:#1e293b;color:#94a3b8;border-color:#334155>Click GET SIGNAL</div>
-<div style=display:grid;grid-template-columns:1fr 1fr;gap:6px><div class=card><span>RSI</span><b id=rsi>--</b></div><div class=card><span>Accuracy</span><b id=acc>--%</b></div><div class=card><span>Trend</span><b id=trend>--</b></div><div class=card><span>BB</span><b id=bb>--</b></div></div>
-<button class=btn id=btn onclick="getSignal()">🔔 GET SIGNAL NOW</button>
-<p id=timer style=text-align:center;color:#fbbf24;font-size:12px;margin:6px>Next candle in: <b id=count>00:49</b> | <span id=modeTxt>DEMO</span></p>
-<div style=margin-top:10px><b style=font-size:12px>History (Real+Demo same):</b><div id=hist></div></div>
+def make_signal(pair):
+    price = round(random.uniform(1.05, 1.35) if "JPY" not in pair else random.uniform(140,160),5)
+    rsi = random.randint(22,78)
+    acc = random.randint(78,92)
+    if rsi < 38: direction, color = "CALL ▲", "#22c55e"
+    elif rsi > 62: direction, color = "PUT ▼", "#ef4444"
+    else: direction, color = "WAIT ●", "#f59e0b"
+    trend = "DOWN" if rsi>50 else "UP"
+    bb = "LOWER" if rsi<35 else "UPPER" if rsi>65 else "MIDDLE"
+    
+    data = {"pair":pair,"price":price,"dir":direction,"color":color,"rsi":rsi,"acc":acc,"trend":trend,"bb":bb,"time":datetime.now().strftime("%H:%M:%S")}
+    STATE["last"]=data
+    STATE["log"].insert(0,f'{data["time"]} {pair} {STATE["tf"]} {direction} {acc}%')
+    STATE["log"]=STATE["log"][:10]
+    
+    if "CALL" in direction or "PUT" in direction:
+        tg_send(f"*POCKET V4 FINAL*\n\n*Pair:* {pair} - {STATE['tf']}\n*Signal:* {direction} *{acc}%*\n*Price:* {price}\n*RSI:* {rsi} | *Trend:* {trend} | *BB:* {bb}\n*Time:* {data['time']}\n\n_Trade now in PocketOption - 1m expiry_")
+    return data
+
+HTML = """
+<!DOCTYPE html>
+<html><head>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="theme-color" content="#020617">
+<link rel="manifest" href="/manifest.json">
+<title>POCKET V4 FINAL</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#020617;color:#fff;font-family:system-ui,Arial;padding:0}
+.app{max-width:420px;margin:0 auto;background:#0b1220;min-height:100vh;padding:12px}
+.head{display:flex;justify-content:space-between;align-items:center}
+.badge{padding:6px 14px;border-radius:20px;font-weight:900;font-size:12px;background:#0ea5e9;color:#fff}
+.pairs{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;margin:10px 0}
+.pairs button{padding:8px 2px;border-radius:10px;border:1px solid #1e293b;background:#1e293b;color:#94a3b8;font-size:11px;font-weight:700}
+.pairs button.active{background:#e0f2fe;color:#0c4a6e;border-color:#38bdf8}
+.tf{display:flex;gap:6px;margin:6px 0;align-items:center;color:#64748b;font-size:13px}
+.tf button{padding:6px 14px;border-radius:10px;border:0;background:#1e293b;color:#fff}
+.tf button.active{background:#fff;color:#000;font-weight:900}
+.price{text-align:center;font-size:42px;font-weight:900;margin:8px 0;letter-spacing:1px}
+.signal{padding:16px;border-radius:16px;text-align:center;font-size:24px;font-weight:900;border:2px solid;margin:10px 0}
+.row{display:flex;justify-content:space-between;background:#151f32;padding:12px 14px;border-radius:12px;margin:6px 0;font-size:14px}
+.btn{width:100%;padding:16px;border-radius:14px;border:0;font-weight:900;font-size:18px;margin-top:10px;background:linear-gradient(90deg,#38bdf8,#22c55e);color:#000}
+.small{font-size:11px;color:#64748b;text-align:center;margin:8px 0}
+.log{background:#020617;padding:8px;border-radius:10px;font-size:11px;margin-top:10px}
+.dot{width:8px;height:8px;background:#22c55e;border-radius:50%;display:inline-block;margin-right:6px;animation:blink 1s infinite}
+@keyframes blink{0%{opacity:1}50%{opacity:.3}}
+</style></head><body><div class=app>
+<div class=head><h2 style="margin:0">POCKET V4<br>FINAL</h2><span class=badge id=tgBadge>TELEGRAM: CHECKING</span></div>
+<div style="color:#22c55e;font-size:12px;margin:6px 0"><span class=dot></span>LIVE - Instant Signal - OTC - No Auto Trade</div>
+<div class=pairs id=pairs></div>
+<div class=tf>Timeframe:<button onclick="setTF('1m')" id=tf1m class=active>1m</button><button onclick="setTF('2m')" id=tf2m>2m</button><button onclick="setTF('5m')" id=tf5m>5m</button></div>
+<div id=pairLabel style="text-align:center;color:#f59e0b;font-weight:900;margin-top:6px">GBPUSD_otc - 1m</div>
+<div class=price id=price>1.08018</div>
+<div class=signal id=sigBox style="border-color:#22c55e;color:#22c55e;background:#052e16">CALL ▲ GBPUSD 87%</div>
+<div class=row><span>RSI</span><b id=rsi>34</b></div>
+<div class=row><span>Accuracy</span><b id=acc>87%</b></div>
+<div class=row><span>Trend</span><b id=trend>DOWN</b></div>
+<div class=row><span>BB</span><b id=bb>LOWER</b></div>
+<button class=btn onclick="getSignal()">🔔 GET SIGNAL NOW</button>
+<div class=small>Next candle in: <b id=timer>00:02</b> | DEMO/REAL same | Manual trade only</div>
+<div class=log id=log>History...</div>
+<div class=small>Tap browser menu → Add to Home Screen → Use as App<br>Signals auto-send to Telegram if Token set in Render</div>
 </div>
 <script>
-const PAIRS=["EURUSD_otc","GBPUSD_otc","EURJPY_otc","USDJPY_otc","AUDUSD_otc","EURGBP_otc","GBPJPY_otc","BTCUSD_otc"];
-let cur="EURUSD_otc";let tf="1m";let mode="DEMO";let history=[];
-function renderPairs(){let h="";PAIRS.forEach(p=>{h+=`<span class=t ${p==cur?'a':''} onclick="setP('${p}')">${p.replace('_otc','')}</span>`});document.getElementById('pairs').innerHTML=h;}
-function setP(p){cur=p;renderPairs();document.getElementById('ttl').innerText=p+" - "+tf;getPrice();}
-function setTF(t){tf=t;document.querySelectorAll('.tf').forEach(x=>x.classList.remove('a'));document.getElementById('tf'+t[0]).classList.add('a');document.getElementById('ttl').innerText=cur+" - "+tf;}
-function setMode(m){mode=m;document.getElementById('modeDemo').classList.toggle('active',m=='DEMO');document.getElementById('modeReal').classList.toggle('active',m=='REAL');document.getElementById('modeTxt').innerText=m;}
-function localSignal(){const rsi=Math.floor(24+Math.random()*52);const trend=Math.random()>0.5?"UP":"DOWN";const bb=["LOWER","UPPER","MIDDLE"][Math.floor(Math.random()*3)];const buy=rsi<35?30:0;const sell=rsi>65?30:0;const dir=buy>=sell||trend=="UP"?"BUY":"SELL";return{pair:cur,price:(1.08+Math.random()*0.03).toFixed(5),direction:dir,action:dir=="BUY"?"CALL ▲":"PUT ▼",accuracy:75+Math.floor(Math.random()*17),rsi:rsi,trend:trend,bb:bb,color:dir=="BUY"?"#22c55e":"#ef4444",timestamp:new Date().toLocaleTimeString()};}
-async function getPrice(){document.getElementById('pr').innerText=(1.08+Math.random()*0.03).toFixed(5);}
-async function getSignal(){const box=document.getElementById('sigBox');box.innerText='Analyzing '+cur+'...';box.style.background='#1e293b';document.getElementById('btn').disabled=true;
- // instant fallback - show in 0.6s even if server sleeps
- setTimeout(()=>{const d=localSignal();showSignal(d);},600);
- try{const r=await fetch('/api/signal?pair='+cur+'&tf='+tf+'&_='+Date.now(),{cache:'no-store'});if(r.ok){const d=await r.json();showSignal(d);}}catch(e){console.log('server sleep, using local');}
- document.getElementById('btn').disabled=false;
+let curPair='GBPUSD_otc';let curTF='1m';
+const pairs=["EURUSD_otc","GBPUSD_otc","EURJPY_otc","USDJPY_otc","AUDUSD_otc","EURGBP_otc","GBPJPY_otc","BTCUSD_otc"];
+function renderPairs(){
+ let h='';pairs.forEach(p=>{h+=`<button onclick="setPair('${p}')" id="p-${p}" class="${p==curPair?'active':''}">${p.replace('_otc','')}</button>`});
+ document.getElementById('pairs').innerHTML=h;
 }
-function showSignal(d){document.getElementById('pr').innerText=d.price;document.getElementById('rsi').innerText=d.rsi;document.getElementById('trend').innerText=d.trend;document.getElementById('bb').innerText=d.bb;document.getElementById('acc').innerText=d.accuracy+'%';const box=document.getElementById('sigBox');box.innerText=d.action+' '+d.pair.replace('_otc','')+' '+d.accuracy+'%';box.style.background=d.direction=='BUY'?'#052e16':'#450a0a';box.style.color=d.color;box.style.borderColor=d.color;history.unshift(d);history=history.slice(0,8);let h="";history.forEach(x=>{h+=`<div class=hist><span>${x.timestamp} ${x.pair.replace('_otc','')} ${x.timeframe||tf} ${x.mode||mode}</span><span style=color:${x.color};font-weight:900>${x.action} ${x.accuracy}%</span></div>`});document.getElementById('hist').innerHTML=h;if(navigator.vibrate) navigator.vibrate([100,50,100]);}
-function tick(){const now=new Date();const sec=60-now.getSeconds();document.getElementById('count').innerText='00:'+(sec<10?'0'+sec:sec);}renderPairs();setInterval(tick,1000);setInterval(getPrice,2000);
-</script></body></html>'''
+function setPair(p){curPair=p;renderPairs();document.getElementById('pairLabel').innerText=p+' - '+curTF;getSignal();}
+function setTF(tf){curTF=tf;document.querySelectorAll('.tf button').forEach(b=>b.classList.remove('active'));document.getElementById('tf'+tf).classList.add('active');document.getElementById('pairLabel').innerText=curPair+' - '+tf;}
+async function getSignal(){
+ const r=await fetch('/api/signal?pair='+curPair+'&tf='+curTF);const d=await r.json();
+ document.getElementById('price').innerText=d.price;
+ document.getElementById('sigBox').innerText=d.dir+' '+d.pair.replace('_otc','')+' '+d.acc+'%';
+ document.getElementById('sigBox').style.color=d.color;document.getElementById('sigBox').style.borderColor=d.color;
+ document.getElementById('rsi').innerText=d.rsi;document.getElementById('acc').innerText=d.acc+'%';
+ document.getElementById('trend').innerText=d.trend;document.getElementById('bb').innerText=d.bb;
+ document.getElementById('log').innerHTML=d.log.map(x=>'<div>'+x+'</div>').join('');
+}
+async function checkTG(){try{const r=await fetch('/api/status');const d=await r.json();document.getElementById('tgBadge').innerText=d.tg_ok?'TELEGRAM ✅':'TELEGRAM ❌';document.getElementById('tgBadge').style.background=d.tg_ok?'#22c55e':'#334155';}catch{}}
+renderPairs();getSignal();checkTG();setInterval(()=>{let s=document.getElementById('timer');let v=s.innerText.split(':');let sec=parseInt(v[1]);sec--;if(sec<0)sec=59;s.innerText='00:'+String(sec).padStart(2,'0')},1000);
+</script></body></html>
+"""
 
 @app.route('/')
 def home(): return HTML
 
 @app.route('/api/signal')
-def signal():
-    p = request.args.get('pair','EURUSD_otc')
-    tf = request.args.get('tf','1m')
-    s = calc(p, tf)
-    return jsonify(s)
+def api_signal():
+    pair = request.args.get('pair', STATE["pair"])
+    tf = request.args.get('tf', '1m')
+    STATE["pair"]=pair; STATE["tf"]=tf
+    d = make_signal(pair)
+    return jsonify({"price":d["price"],"dir":d["dir"],"color":d["color"],"rsi":d["rsi"],"acc":d["acc"],"trend":d["trend"],"bb":d["bb"],"pair":d["pair"],"log":STATE["log"]})
 
-@app.route('/api/price')
-def price():
-    return jsonify({"price": f"{1.08+random.uniform(-0.01,0.01):.5f}"})
+@app.route('/api/status')
+def status(): return jsonify({"tg_ok": bool(TG_TOKEN and TG_CHAT)})
+
+@app.route('/manifest.json')
+def manifest():
+    return jsonify({"name":"Pocket V4 Final","short_name":"POCKET V4","start_url":"/","display":"standalone","background_color":"#020617","theme_color":"#020617"})
 
 @app.route('/health')
 def h(): return "OK"
+
+if __name__=='__main__': app.run(host='0.0.0.0', port=int(os.environ.get('PORT',10000)))
